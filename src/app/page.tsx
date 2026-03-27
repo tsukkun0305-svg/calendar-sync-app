@@ -5,46 +5,72 @@ import { useState, useEffect } from "react";
 import styles from "./page.module.css";
 import Image from "next/image";
 
+const timeSlots = [
+  { label: "11:00 ~ 12:00", start: "11:00", end: "12:00" },
+  { label: "12:10 ~ 13:10", start: "12:10", end: "13:10" },
+  { label: "13:20 ~ 14:20", start: "13:20", end: "14:20" },
+  { label: "14:30 ~ 15:30", start: "14:30", end: "15:30" },
+  { label: "15:30 ~ 16:30", start: "15:30", end: "16:30" },
+  { label: "16:40 ~ 17:40", start: "16:40", end: "17:40" },
+  { label: "17:50 ~ 18:50", start: "17:50", end: "18:50" },
+  { label: "19:00 ~ 20:00", start: "19:00", end: "20:00" },
+];
+
 export default function Home() {
   const { data: session, status } = useSession();
   const [events, setEvents] = useState<any[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
   
-  // 新規予定入力用状態
-  const [summary, setSummary] = useState("");
   const [date, setDate] = useState("");
-  const [selectedTimeSlots, setSelectedTimeSlots] = useState<number[]>([]);
+  const [slotContents, setSlotContents] = useState<Record<number, string>>({});
+  const [focusedSlot, setFocusedSlot] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
   const [tasks, setTasks] = useState<any[]>([]);
   const [customItems, setCustomItems] = useState<string[]>([]);
-
-  const timeSlots = [
-    { label: "11:00 ~ 12:00", start: "11:00", end: "12:00" },
-    { label: "12:10 ~ 13:10", start: "12:10", end: "13:10" },
-    { label: "13:20 ~ 14:20", start: "13:20", end: "14:20" },
-    { label: "14:30 ~ 15:30", start: "14:30", end: "15:30" },
-    { label: "15:30 ~ 16:30", start: "15:30", end: "16:30" },
-    { label: "16:40 ~ 17:40", start: "16:40", end: "17:40" },
-    { label: "17:50 ~ 18:50", start: "17:50", end: "18:50" },
-    { label: "19:00 ~ 20:00", start: "19:00", end: "20:00" },
-  ];
+  const [newCustomTitle, setNewCustomTitle] = useState(""); // TODO/お気に入り追加用の一時保管
 
   useEffect(() => {
     if (session) {
-      fetchEvents();
+      if (!date) {
+        const tzoffset = (new Date()).getTimezoneOffset() * 60000;
+        const localISODate = (new Date(Date.now() - tzoffset)).toISOString().split('T')[0];
+        setDate(localISODate);
+      }
+      
       fetchTasks();
       
-      const tzoffset = (new Date()).getTimezoneOffset() * 60000;
-      const localISODate = (new Date(Date.now() - tzoffset)).toISOString().split('T')[0];
-      setDate(localISODate);
-
       const saved = localStorage.getItem("customCalendarItems");
       if (saved) {
         setCustomItems(JSON.parse(saved));
       }
     }
   }, [session]);
+
+  useEffect(() => {
+    if (session && date) {
+      loadEventsForDate(date);
+      setSlotContents({}); // 日付が変わったら入力内容をリセット
+    }
+  }, [date, session]);
+
+  const loadEventsForDate = async (targetDate: string) => {
+    setLoadingEvents(true);
+    try {
+      const startOfDay = `${targetDate}T00:00:00+09:00`;
+      const endOfDay = `${targetDate}T23:59:59+09:00`;
+      const res = await fetch(`/api/calendar?timeMin=${encodeURIComponent(startOfDay)}&timeMax=${encodeURIComponent(endOfDay)}`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        const nonAllDayEvents = (data.events || []).filter((e: any) => !e.start.date);
+        setEvents(nonAllDayEvents);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingEvents(false);
+    }
+  };
 
   const fetchTasks = async () => {
     try {
@@ -59,11 +85,12 @@ export default function Home() {
   };
 
   const handleSaveCustomItem = () => {
-    if (!summary) return;
-    if (customItems.includes(summary)) return;
-    const newItems = [...customItems, summary];
+    if (!newCustomTitle) return;
+    if (customItems.includes(newCustomTitle)) return;
+    const newItems = [...customItems, newCustomTitle];
     setCustomItems(newItems);
     localStorage.setItem("customCalendarItems", JSON.stringify(newItems));
+    setNewCustomTitle("");
   };
   
   const handleRemoveCustomItem = (itemToRemove: string) => {
@@ -72,33 +99,32 @@ export default function Home() {
     localStorage.setItem("customCalendarItems", JSON.stringify(newItems));
   };
 
-  const fetchEvents = async () => {
-    setLoadingEvents(true);
-    try {
-      const res = await fetch("/api/calendar");
-      if (res.ok) {
-        const data = await res.json();
-        setEvents(data.events || []);
+  const handleChipClick = (text: string) => {
+    if (focusedSlot !== null && !getBookedEvent(focusedSlot)) {
+      setSlotContents({ ...slotContents, [focusedSlot]: text });
+    } else {
+      // 最初の空いている枠を探して入れる
+      const emptyIdx = timeSlots.findIndex((_, idx) => !getBookedEvent(idx) && !slotContents[idx]);
+      if (emptyIdx !== -1) {
+        setSlotContents({ ...slotContents, [emptyIdx]: text });
+        setFocusedSlot(emptyIdx);
+      } else {
+        alert("空いている時間枠がありません。");
       }
-    } catch (err) {
-      console.error("Failed to fetch events", err);
-    } finally {
-      setLoadingEvents(false);
     }
   };
 
-  const handleAddEvent = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!summary || !date || selectedTimeSlots.length === 0) {
-      alert("内容、日付、時間帯をすべて入力してください。");
+  const handleBatchSubmit = async () => {
+    const slotsToSubmit = Object.entries(slotContents).filter(([_, text]) => text && text.trim() !== "");
+    if (slotsToSubmit.length === 0) {
+      alert("登録する予定が1つも入力されていません。");
       return;
     }
     
     setIsSubmitting(true);
-    
     try {
-      // 選択された時間枠すべてに対して非同期で予定作成リクエストを送信
-      const promises = selectedTimeSlots.map(idx => {
+      const promises = slotsToSubmit.map(([idxStr, summary]) => {
+        const idx = parseInt(idxStr);
         const slot = timeSlots[idx];
         const startIso = `${date}T${slot.start}:00+09:00`;
         const endIso = `${date}T${slot.end}:00+09:00`;
@@ -106,32 +132,43 @@ export default function Home() {
         return fetch("/api/calendar", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            summary,
-            start: startIso,
-            end: endIso
-          })
+          body: JSON.stringify({ summary, start: startIso, end: endIso })
         }).then(async res => {
-          if (!res.ok) {
-            const error = await res.json();
-            throw new Error(error.error || "Failed to add event");
-          }
-          return res;
+          if (!res.ok) throw new Error("API failed");
+          return res.json();
         });
       });
 
       await Promise.all(promises);
-      
-      setSummary("");
-      setSelectedTimeSlots([]);
-      fetchEvents(); // 予定を再取得して画面更新
-      alert("選択した予定がすべて追加されました！");
+      setSlotContents({});
+      setFocusedSlot(null);
+      loadEventsForDate(date);
+      alert(`${slotsToSubmit.length}件の予定をGoogleカレンダーに登録しました！`);
     } catch (err: any) {
       console.error(err);
-      alert(`エラー: ${err.message || "予定の追加でエラーが発生しました。"}`);
+      alert("予定の追加でエラーが発生しました。");
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const getBookedEvent = (slotIndex: number) => {
+    const slot = timeSlots[slotIndex];
+    if (!date) return null;
+    
+    const slotStartObj = new Date(`${date}T${slot.start}:00+09:00`);
+    const slotEndObj = new Date(`${date}T${slot.end}:00+09:00`);
+
+    return events.find(event => {
+      // 終日予定の場合はブロック判定をしない（好みに応じて変更可能）
+      if (event.start.date) return false;
+      
+      const eventStart = new Date(event.start.dateTime || event.start.date);
+      const eventEnd = new Date(event.end.dateTime || event.end.date);
+      
+      // 時間が少しでも被っていれば予約済みとする
+      return eventStart < slotEndObj && eventEnd > slotStartObj;
+    });
   };
 
   if (status === "loading") {
@@ -172,161 +209,106 @@ export default function Home() {
       </header>
 
       <div className={styles.dashboard}>
-        {/* 今日の予定リスト（メインダッシュボード） */}
-        <section className={styles.card}>
-          <h2 className={styles.cardTitle}>今日の予定</h2>
+        <section className={styles.card} style={{ gridColumn: "1 / -1" }}>
           
-          {loadingEvents ? (
-            <p className={styles.emptyState}>読み込み中...</p>
-          ) : events.length === 0 ? (
-            <p className={styles.emptyState}>今日の予定はありません。素晴らしい1日を！</p>
-          ) : (
-            <ul className={styles.eventList}>
-              {events.map((event) => {
-                const isAllDay = event.start.date;
-                const startDate = new Date(event.start.dateTime || event.start.date);
-                const endDate = new Date(event.end.dateTime || event.end.date);
-                
-                return (
-                  <li key={event.id} className={styles.eventItem}>
-                    <div className={styles.eventTitle}>{event.summary}</div>
-                    <div className={styles.eventTime}>
-                      {isAllDay ? (
-                        "終日"
-                      ) : (
-                        `${startDate.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} - ${endDate.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-
-        {/* 予定作成フォーム */}
-        <section className={styles.card}>
-          <h2 className={styles.cardTitle}>予定を追加</h2>
-          <form onSubmit={handleAddEvent}>
-            <div className={styles.formGroup}>
-              <label className={styles.label}>内容</label>
-
-              {/* 選択肢エリア */}
-              {(tasks.length > 0 || customItems.length > 0) && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.8rem" }}>
-                  {tasks.map((task) => (
-                    <button
-                      key={task.id}
-                      type="button"
-                      onClick={() => setSummary(task.title)}
-                      style={{
-                        padding: "0.4rem 0.8rem", borderRadius: "16px", border: "1px solid #fbbc05",
-                        background: "#fffdf0", color: "#b98300", fontSize: "0.85rem", cursor: "pointer",
-                        transition: "all 0.2s"
-                      }}
-                    >
-                      ☑️ {task.title}
-                    </button>
-                  ))}
-                  {customItems.map((cItem, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", background: "#f1f3f4", border: "1px solid #ddd", borderRadius: "16px", overflow: "hidden" }}>
-                      <button
-                        type="button"
-                        onClick={() => setSummary(cItem)}
-                        style={{ padding: "0.4rem 0.8rem", border: "none", background: "transparent", color: "#555", fontSize: "0.85rem", cursor: "pointer" }}
-                      >
-                        ⭐ {cItem}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveCustomItem(cItem)}
-                        style={{ padding: "0.4rem 0.6rem", border: "none", borderLeft: "1px solid #ddd", background: "#e8eaed", color: "#888", fontSize: "0.85rem", cursor: "pointer" }}
-                        title="削除"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <input
-                  type="text"
-                  value={summary}
-                  onChange={(e) => setSummary(e.target.value)}
-                  placeholder="例: 三者面談, ミーティング"
-                  className={styles.input}
-                  required
-                />
-                <button 
-                  type="button" 
-                  onClick={handleSaveCustomItem}
-                  disabled={!summary}
-                  style={{ 
-                    whiteSpace: "nowrap", padding: "0 1rem", background: "#f8f9fa", border: "1px solid #ddd", 
-                    borderRadius: "8px", cursor: summary ? "pointer" : "not-allowed", color: summary ? "#4285f4" : "#aaa",
-                    fontWeight: 600
-                  }}
-                >
-                  保存
-                </button>
-              </div>
-              <small style={{ color: "#777", marginTop: "0.3rem", display: "block" }}>
-                入力して「保存」を押すとよく使う項目に追加されます。TODOリストも自動連携されます。
-              </small>
-            </div>
-            <div className={styles.formGroup}>
-              <label className={styles.label}>日付</label>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem", borderBottom: "2px solid #f0f0f0", paddingBottom: "1rem" }}>
+            <h2 className={styles.cardTitle} style={{ margin: 0, border: "none", padding: 0 }}>予定を一括登録</h2>
+            <div className={styles.datePickerWrapper}>
+              <label style={{ marginRight: "0.5rem", fontWeight: 600, color: "#333" }}>対象日:</label>
               <input
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 className={styles.input}
+                style={{ width: "auto" }}
                 required
               />
             </div>
-            <div className={styles.formGroup}>
-              <label className={styles.label}>時間帯 (複数選択可)</label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
-                {timeSlots.map((slot, idx) => {
-                  const isSelected = selectedTimeSlots.includes(idx);
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => {
-                        if (isSelected) {
-                          setSelectedTimeSlots(selectedTimeSlots.filter(i => i !== idx));
-                        } else {
-                          setSelectedTimeSlots([...selectedTimeSlots, idx]);
-                        }
-                      }}
-                      style={{
-                        padding: "0.5rem",
-                        borderRadius: "8px",
-                        border: `1px solid ${isSelected ? "#4285f4" : "#ddd"}`,
-                        background: isSelected ? "#e8f0fe" : "white",
-                        color: isSelected ? "#174ea6" : "#333",
-                        cursor: "pointer",
-                        fontWeight: isSelected ? 600 : 400,
-                        transition: "all 0.2s ease"
-                      }}
-                    >
-                      {slot.label}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) 2fr", gap: "2rem" }}>
+            
+            {/* 左パネル: TODO & カスタム項目 */}
+            <div className={styles.chipsPanel}>
+              <h3 style={{ fontSize: "1rem", color: "#555", marginBottom: "1rem" }}>選択肢（クリックで入力枠に挿入）</h3>
+              
+              {(tasks.length > 0 || customItems.length > 0) ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
+                  {tasks.map((task) => (
+                    <button key={task.id} type="button" onClick={() => handleChipClick(task.title)} className={styles.taskChip}>
+                      ☑️ {task.title}
                     </button>
+                  ))}
+                  {customItems.map((cItem, i) => (
+                    <div key={i} className={styles.customChip}>
+                      <button type="button" onClick={() => handleChipClick(cItem)} className={styles.customChipText}>
+                        ⭐ {cItem}
+                      </button>
+                      <button type="button" onClick={() => handleRemoveCustomItem(cItem)} className={styles.customChipDelete} title="削除">
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ color: "#aaa", fontSize: "0.9rem" }}>TODOがありません</p>
+              )}
+
+              <div style={{ display: "flex", gap: "0.5rem", marginTop: "1.5rem" }}>
+                <input type="text" value={newCustomTitle} onChange={(e) => setNewCustomTitle(e.target.value)} placeholder="よく使う項目を追加..." className={styles.input} style={{ flex: 1, padding: "0.5rem" }} />
+                <button type="button" onClick={handleSaveCustomItem} disabled={!newCustomTitle} className={styles.saveBtn} style={{ cursor: newCustomTitle ? "pointer" : "not-allowed" }}>保存</button>
+              </div>
+            </div>
+
+            {/* 右パネル: タイムスロット一覧 */}
+            <div className={styles.slotsPanel}>
+              <div className={styles.slotGrid}>
+                {timeSlots.map((slot, idx) => {
+                  const bookedEvent = getBookedEvent(idx);
+                  const isBooked = !!bookedEvent;
+                  const isFocused = focusedSlot === idx;
+
+                  return (
+                    <div key={idx} className={`${styles.slotRow} ${isFocused ? styles.slotRowFocused : ''}`}>
+                      <div className={styles.slotTime}>{slot.label}</div>
+                      <div className={styles.slotInputWrapper}>
+                        {loadingEvents ? (
+                          <div className={styles.loadingSlot}>確認中...</div>
+                        ) : isBooked ? (
+                          <div className={styles.bookedSlot}>
+                            <span style={{ fontWeight: "bold", marginRight: "0.5rem" }}>[予定あり]</span>
+                            {bookedEvent?.summary || "非公開予定"}
+                          </div>
+                        ) : (
+                          <input
+                            type="text"
+                            placeholder="予定の内容を入力..."
+                            value={slotContents[idx] || ""}
+                            onFocus={() => setFocusedSlot(idx)}
+                            onChange={(e) => setSlotContents({ ...slotContents, [idx]: e.target.value })}
+                            className={styles.slotInput}
+                          />
+                        )}
+                      </div>
+                    </div>
                   );
                 })}
               </div>
+
+              <div style={{ marginTop: "2rem", textAlign: "right" }}>
+                <button 
+                  type="button" 
+                  onClick={handleBatchSubmit}
+                  className={styles.submitButton}
+                  disabled={isSubmitting || Object.values(slotContents).filter(v => v.trim() !== "").length === 0}
+                  style={{ width: "auto", minWidth: "200px" }}
+                >
+                  {isSubmitting ? "追加中..." : "まとめて登録する"}
+                </button>
+              </div>
             </div>
-            <button 
-              type="submit" 
-              className={styles.submitButton}
-              disabled={isSubmitting || !summary || selectedTimeSlots.length === 0}
-            >
-              {isSubmitting ? "追加中..." : "カレンダーに追加する"}
-            </button>
-          </form>
+
+          </div>
         </section>
       </div>
     </main>

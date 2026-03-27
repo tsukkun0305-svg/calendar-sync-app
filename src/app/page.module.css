@@ -230,3 +230,131 @@
   font-size: 1.2rem;
   color: #555;
 }
+
+/* 追加スタイル: 新UI用 */
+.chipsPanel {
+  background: #f8f9fc;
+  border-radius: 12px;
+  padding: 1.5rem;
+  border: 1px solid #e2e8f0;
+}
+
+.slotsPanel {
+  display: flex;
+  flex-direction: column;
+}
+
+.slotGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.slotRow {
+  display: flex;
+  align-items: center;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s;
+}
+
+.slotRow:hover, .slotRowFocused {
+  box-shadow: 0 4px 12px rgba(66, 133, 244, 0.15);
+  border-color: #4285f4;
+}
+
+.slotTime {
+  width: 140px;
+  background: #f1f5f9;
+  padding: 1rem;
+  font-weight: 600;
+  color: #475569;
+  border-right: 1px solid #e2e8f0;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.slotInputWrapper {
+  flex: 1;
+  display: flex;
+}
+
+.slotInput {
+  width: 100%;
+  padding: 1rem;
+  border: none;
+  font-size: 1rem;
+  outline: none;
+}
+
+.bookedSlot {
+  width: 100%;
+  padding: 1rem;
+  background: #fef2f2;
+  color: #ef4444;
+  font-size: 0.95rem;
+}
+
+.loadingSlot {
+  width: 100%;
+  padding: 1rem;
+  background: #f8fafc;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.taskChip {
+  padding: 0.4rem 0.8rem;
+  border-radius: 16px;
+  border: 1px solid #fbbc05;
+  background: #fffdf0;
+  color: #b98300;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.taskChip:hover { opacity: 0.8; }
+
+.customChip {
+  display: flex;
+  align-items: center;
+  background: #f1f3f4;
+  border: 1px solid #ddd;
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.customChipText {
+  padding: 0.4rem 0.8rem;
+  border: none;
+  background: transparent;
+  color: #555;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.customChipText:hover { background: #e8eaed; }
+
+.customChipDelete {
+  padding: 0.4rem 0.6rem;
+  border: none;
+  border-left: 1px solid #ddd;
+  background: #e8eaed;
+  color: #888;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.customChipDelete:hover { background: #d5d7d9; }
+
+.saveBtn {
+  white-space: nowrap;
+  padding: 0 1rem;
+  background: #f8f9fa;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  color: #4285f4;
+  font-weight: 600;
+}
+.saveBtn:hover:not(:disabled) { background: #e8f0fe; }
+
