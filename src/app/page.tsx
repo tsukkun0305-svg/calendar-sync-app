@@ -110,53 +110,72 @@ export default function Home() {
   };
 
   const handleChipClick = (text: string) => {
-    if (focusedSlot !== null && !getBookedEvent(focusedSlot)) {
+    if (focusedSlot !== null) {
       setSlotContents({ ...slotContents, [focusedSlot]: text });
     } else {
       // 最初の空いている枠を探して入れる
-      const emptyIdx = timeSlots.findIndex((_, idx) => !getBookedEvent(idx) && !slotContents[idx]);
+      const emptyIdx = timeSlots.findIndex((_, idx) => {
+        const booked = getBookedEvent(idx);
+        const currentText = slotContents[idx] !== undefined ? slotContents[idx] : (booked?.summary || "");
+        return currentText === "";
+      });
       if (emptyIdx !== -1) {
         setSlotContents({ ...slotContents, [emptyIdx]: text });
         setFocusedSlot(emptyIdx);
       } else {
-        alert("空いている時間枠がありません。");
+        alert("空いている場所がありません。");
       }
     }
   };
 
   const handleBatchSubmit = async () => {
-    const slotsToSubmit = Object.entries(slotContents).filter(([_, text]) => text && text.trim() !== "");
-    if (slotsToSubmit.length === 0) {
-      alert("登録する予定が1つも入力されていません。");
+    const tasksToRun: Promise<any>[] = [];
+
+    timeSlots.forEach((slot, idx) => {
+      const bookedEvent = getBookedEvent(idx);
+      const originalText = bookedEvent?.summary || "";
+      const currentText = slotContents[idx] !== undefined ? slotContents[idx] : originalText;
+
+      if (currentText === originalText) return;
+
+      const startIso = `${date}T${slot.start}:00+09:00`;
+      const endIso = `${date}T${slot.end}:00+09:00`;
+
+      if (bookedEvent && currentText.trim() === "") {
+        // 削除
+        tasksToRun.push(fetch(`/api/calendar?eventId=${bookedEvent.id}`, { method: "DELETE" }).then(res => res.json()));
+      } else if (bookedEvent && currentText.trim() !== "") {
+        // 更新 (PUT)
+        tasksToRun.push(fetch("/api/calendar", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ eventId: bookedEvent.id, summary: currentText, start: startIso, end: endIso })
+        }).then(res => res.json()));
+      } else if (!bookedEvent && currentText.trim() !== "") {
+        // 新規作成 (POST)
+        tasksToRun.push(fetch("/api/calendar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ summary: currentText, start: startIso, end: endIso })
+        }).then(res => res.json()));
+      }
+    });
+
+    if (tasksToRun.length === 0) {
+      alert("変更された予定がありません。");
       return;
     }
     
     setIsSubmitting(true);
     try {
-      const promises = slotsToSubmit.map(([idxStr, summary]) => {
-        const idx = parseInt(idxStr);
-        const slot = timeSlots[idx];
-        const startIso = `${date}T${slot.start}:00+09:00`;
-        const endIso = `${date}T${slot.end}:00+09:00`;
-
-        return fetch("/api/calendar", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ summary, start: startIso, end: endIso })
-        }).then(async res => {
-          if (!res.ok) throw new Error("API failed");
-          return res.json();
-        });
-      });
-
-      await Promise.all(promises);
+      await Promise.all(tasksToRun);
       setSlotContents({});
       setFocusedSlot(null);
       loadEventsForDate(date);
-      alert(`${slotsToSubmit.length}件の予定をGoogleカレンダーに登録しました！`);
+      alert("変更をGoogleカレンダーに反映しました！");
     } catch (err: any) {
       console.error(err);
-      alert("予定の追加でエラーが発生しました。");
+      alert("予定の更新でエラーが発生しました。");
     } finally {
       setIsSubmitting(false);
     }
@@ -284,20 +303,33 @@ export default function Home() {
                       <div className={styles.slotInputWrapper}>
                         {loadingEvents ? (
                           <div className={styles.loadingSlot}>確認中...</div>
-                        ) : isBooked ? (
-                          <div className={styles.bookedSlot}>
-                            <span style={{ fontWeight: "bold", marginRight: "0.5rem" }}>[予定あり]</span>
-                            {bookedEvent?.summary || "非公開予定"}
-                          </div>
                         ) : (
-                          <input
-                            type="text"
-                            placeholder="予定の内容を入力..."
-                            value={slotContents[idx] || ""}
-                            onFocus={() => setFocusedSlot(idx)}
-                            onChange={(e) => setSlotContents({ ...slotContents, [idx]: e.target.value })}
-                            className={styles.slotInput}
-                          />
+                          <div style={{ display: 'flex', width: '100%', alignItems: 'center', backgroundColor: isBooked ? "#fef2f2" : "transparent" }}>
+                            {isBooked && (
+                              <span style={{ 
+                                fontWeight: "bold", 
+                                color: "#ef4444", 
+                                paddingLeft: "1rem",
+                                fontSize: "0.9rem",
+                                whiteSpace: "nowrap"
+                              }}>
+                                [予定あり]
+                              </span>
+                            )}
+                            <input
+                              type="text"
+                              placeholder={isBooked ? "予定を空にして保存すると削除されます" : "予定の内容を入力..."}
+                              value={slotContents[idx] !== undefined ? slotContents[idx] : (bookedEvent?.summary || "")}
+                              onFocus={() => setFocusedSlot(idx)}
+                              onChange={(e) => setSlotContents({ ...slotContents, [idx]: e.target.value })}
+                              className={styles.slotInput}
+                              style={{ 
+                                backgroundColor: "transparent", 
+                                color: isBooked ? "#333" : "inherit", 
+                                paddingLeft: isBooked ? "0.5rem" : "1rem" 
+                              }}
+                            />
+                          </div>
                         )}
                       </div>
                     </div>
@@ -310,10 +342,14 @@ export default function Home() {
                   type="button" 
                   onClick={handleBatchSubmit}
                   className={styles.submitButton}
-                  disabled={isSubmitting || Object.values(slotContents).filter(v => v.trim() !== "").length === 0}
+                  disabled={isSubmitting || !timeSlots.some((slot, idx) => {
+                    const originalText = getBookedEvent(idx)?.summary || "";
+                    const currentText = slotContents[idx] !== undefined ? slotContents[idx] : originalText;
+                    return currentText !== originalText;
+                  })}
                   style={{ width: "auto", minWidth: "200px" }}
                 >
-                  {isSubmitting ? "追加中..." : "まとめて登録する"}
+                  {isSubmitting ? "処理中..." : "変更をまとめて反映する"}
                 </button>
               </div>
             </div>

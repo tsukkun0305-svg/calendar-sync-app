@@ -60,3 +60,47 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message || "Failed to create calendar event" }, { status: 500 });
   }
 }
+
+export async function PUT(request: Request) {
+  try {
+    const calendar = await getCalendarClient();
+    const body = await request.json();
+    const { eventId, summary, start, end } = body;
+
+    if (!eventId) throw new Error("eventId is required");
+
+    const response = await calendar.events.patch({
+      calendarId: "primary",
+      eventId: eventId,
+      requestBody: {
+        summary,
+        start: { dateTime: start, timeZone: "Asia/Tokyo" },
+        end: { dateTime: end, timeZone: "Asia/Tokyo" },
+      },
+    });
+
+    return NextResponse.json({ event: response.data });
+  } catch (error: any) {
+    console.error("Calendar API Error (PUT):", error);
+    return NextResponse.json({ error: error.message || "Failed to update event" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const calendar = await getCalendarClient();
+    const url = new URL(request.url);
+    const eventId = url.searchParams.get("eventId");
+    if (!eventId) throw new Error("eventId is required");
+
+    await calendar.events.delete({
+      calendarId: "primary",
+      eventId: eventId,
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error("Calendar API Error (DELETE):", error);
+    return NextResponse.json({ error: error.message || "Failed to delete event" }, { status: 500 });
+  }
+}
