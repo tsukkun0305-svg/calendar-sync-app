@@ -64,6 +64,11 @@ export default function Home() {
         const data = await res.json();
         const nonAllDayEvents = (data.events || []).filter((e: any) => !e.start.date);
         setEvents(nonAllDayEvents);
+      } else {
+        const errorData = await res.json();
+        console.error("Calendar API Error:", errorData);
+        const errMsg = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
+        alert(`【カレンダー連携エラー】\n${errMsg}\n\n※一度右上の「ログアウト」から再ログインをお試しください。`);
       }
     } catch (err) {
       console.error(err);
@@ -74,10 +79,15 @@ export default function Home() {
 
   const fetchTasks = async () => {
     try {
-      const res = await fetch("/api/tasks");
+      const res = await fetch("/api/tasks", { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         setTasks(data.tasks || []);
+      } else {
+        const errorData = await res.json();
+        console.error("Failed to fetch tasks:", errorData);
+        const errMsg = typeof errorData.error === 'string' ? errorData.error : JSON.stringify(errorData.error);
+        alert(`【TODO連携エラー】\n${errMsg}\n\n※Google Tasks APIが有効でないか、再ログインが必要です。`);
       }
     } catch (err) {
       console.error("Failed to fetch tasks", err);
