@@ -4,6 +4,7 @@ import { useSession, signIn, signOut } from "next-auth/react";
 import { useState, useEffect } from "react";
 import styles from "./page.module.css";
 import Image from "next/image";
+import Link from "next/link";
 
 const timeSlots = [
   { label: "11:00 ~ 12:00", start: "11:00", end: "12:00" },
@@ -219,6 +220,11 @@ export default function Home() {
             </svg>
             Googleでログイン
           </button>
+          <div style={{ marginTop: "1.5rem", paddingTop: "1.5rem", borderTop: "1px solid #eee", textAlign: "center" }}>
+            <Link href="/animal-diagnosis" style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", color: "#f97316", fontWeight: 600, textDecoration: "none", fontSize: "0.95rem" }}>
+              🐾 動物顔診断を試してみる
+            </Link>
+          </div>
         </div>
       </main>
     );
@@ -229,6 +235,9 @@ export default function Home() {
       <header className={styles.header}>
         <h1 className={styles.title} style={{ margin: 0, fontSize: "1.5rem" }}>Calendar Sync</h1>
         <div className={styles.userInfo}>
+          <Link href="/animal-diagnosis" style={{ color: "#f97316", fontWeight: 600, textDecoration: "none", fontSize: "0.9rem", whiteSpace: "nowrap" }}>
+            🐾 動物診断
+          </Link>
           <span style={{ fontWeight: 500 }}>{session.user?.name}</span>
           {session.user?.image && (
              <img src={session.user.image} alt="アバター" className={styles.avatar} />
