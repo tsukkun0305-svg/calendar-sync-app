@@ -43,11 +43,21 @@ export async function POST(request: Request) {
     };
     const mediaType = mediaTypeMap[ext] || "image/jpeg";
 
-    // Save photo to uploads directory
+    // Save photo (local: uploads/, Vercel: /tmp/uploads/)
     const timestamp = Date.now();
     const filename = `${timestamp}.${ext}`;
-    const uploadsDir = join(process.cwd(), "uploads");
-    await writeFile(join(uploadsDir, filename), buffer);
+    let savedFilename = filename;
+    try {
+      const { mkdir } = await import("fs/promises");
+      const uploadsDir = process.env.VERCEL
+        ? join("/tmp", "uploads")
+        : join(process.cwd(), "uploads");
+      await mkdir(uploadsDir, { recursive: true });
+      await writeFile(join(uploadsDir, filename), buffer);
+    } catch {
+      // Filesystem not writable — diagnosis still works, photo not saved
+      savedFilename = "";
+    }
 
     const response = await client.messages.create({
       model: "claude-opus-4-8",
@@ -107,7 +117,7 @@ export async function POST(request: Request) {
       reason: result.reason,
       compatibility: result.compatibility,
       score: result.score,
-      filename,
+      filename: savedFilename,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "エラーが発生しました";
