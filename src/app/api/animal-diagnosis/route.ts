@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { writeFile } from "fs/promises";
-import { join } from "path";
+import { put } from "@vercel/blob";
 
 const client = new Anthropic();
 
@@ -19,7 +18,6 @@ export async function POST(request: Request) {
     if (!imageFile) {
       return NextResponse.json({ error: "画像が見つかりません" }, { status: 400 });
     }
-
     if (consent !== "true") {
       return NextResponse.json({ error: "同意が必要です" }, { status: 400 });
     }
@@ -43,20 +41,33 @@ export async function POST(request: Request) {
     };
     const mediaType = mediaTypeMap[ext] || "image/jpeg";
 
-    // Save photo (local: uploads/, Vercel: /tmp/uploads/)
+    // Save to Vercel Blob (persistent) or fallback to local filesystem
     const timestamp = Date.now();
     const filename = `${timestamp}.${ext}`;
-    let savedFilename = filename;
-    try {
-      const { mkdir } = await import("fs/promises");
-      const uploadsDir = process.env.VERCEL
-        ? join("/tmp", "uploads")
-        : join(process.cwd(), "uploads");
-      await mkdir(uploadsDir, { recursive: true });
-      await writeFile(join(uploadsDir, filename), buffer);
-    } catch {
-      // Filesystem not writable — diagnosis still works, photo not saved
-      savedFilename = "";
+    let savedUrl = "";
+
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      try {
+        const blob = await put(`uploads/${filename}`, buffer, {
+          access: "public",
+          contentType: mediaType,
+        });
+        savedUrl = blob.url;
+      } catch (e) {
+        console.error("Blob upload failed:", e);
+      }
+    } else {
+      // Local fallback
+      try {
+        const { writeFile, mkdir } = await import("fs/promises");
+        const { join } = await import("path");
+        const uploadsDir = join(process.cwd(), "uploads");
+        await mkdir(uploadsDir, { recursive: true });
+        await writeFile(join(uploadsDir, filename), buffer);
+        savedUrl = filename;
+      } catch {
+        // Not writable, skip
+      }
     }
 
     const response = await client.messages.create({
@@ -69,11 +80,7 @@ export async function POST(request: Request) {
           content: [
             {
               type: "image",
-              source: {
-                type: "base64",
-                media_type: mediaType,
-                data: base64,
-              },
+              source: { type: "base64", media_type: mediaType, data: base64 },
             },
             {
               type: "text",
@@ -117,7 +124,7 @@ export async function POST(request: Request) {
       reason: result.reason,
       compatibility: result.compatibility,
       score: result.score,
-      filename: savedFilename,
+      savedUrl,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "エラーが発生しました";

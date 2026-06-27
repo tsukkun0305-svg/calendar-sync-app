@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import Link from "next/link";
 
 type DiagnosisResult = {
@@ -8,10 +8,10 @@ type DiagnosisResult = {
   reason: string;
   compatibility: string;
   score: number;
-  filename: string;
+  savedUrl: string;
 };
 
-type Step = "input" | "loading" | "result";
+type Step = "input" | "camera" | "loading" | "result";
 
 const ANIMAL_EMOJIS: Record<string, string> = {
   犬: "🐶", 猫: "🐱", うさぎ: "🐰", 熊: "🐻", キツネ: "🦊", 狼: "🐺",
@@ -35,14 +35,78 @@ export default function AnimalDiagnosisPage() {
   const [consent, setConsent] = useState(false);
   const [result, setResult] = useState<DiagnosisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [captureMode, setCaptureMode] = useState<"upload" | "camera">("upload");
   const [deleteEmail, setDeleteEmail] = useState("");
   const [deleteReason, setDeleteReason] = useState("");
   const [deleteStatus, setDeleteStatus] = useState<string | null>(null);
   const [showDeleteForm, setShowDeleteForm] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+  }, []);
+
+  const startCamera = useCallback(async (mode: "user" | "environment") => {
+    stopCamera();
+    setCameraError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "カメラへのアクセスができませんでした";
+      setCameraError(
+        msg.includes("NotAllowed") || msg.includes("Permission")
+          ? "カメラへのアクセスが拒否されました。ブラウザの設定で許可してください。"
+          : "カメラを起動できませんでした。別の方法で写真をアップロードしてください。"
+      );
+    }
+  }, [stopCamera]);
+
+  useEffect(() => {
+    if (step === "camera") {
+      startCamera(facingMode);
+    } else {
+      stopCamera();
+    }
+    return () => stopCamera();
+  }, [step, facingMode, startCamera, stopCamera]);
+
+  const handleCapture = useCallback(() => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    if (facingMode === "user") {
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+    }
+    ctx.drawImage(video, 0, 0);
+
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const file = new File([blob], "camera.jpg", { type: "image/jpeg" });
+      setImageFile(file);
+      setImagePreview(canvas.toDataURL("image/jpeg", 0.9));
+      stopCamera();
+      setStep("input");
+    }, "image/jpeg", 0.9);
+  }, [facingMode, stopCamera]);
 
   const handleFileChange = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) {
@@ -56,11 +120,6 @@ export default function AnimalDiagnosisPage() {
     setError(null);
   }, []);
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFileChange(file);
-  };
-
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
@@ -69,26 +128,15 @@ export default function AnimalDiagnosisPage() {
 
   const handleSubmit = async () => {
     if (!imageFile || !consent) return;
-
     setStep("loading");
     setError(null);
-
     try {
       const formData = new FormData();
       formData.append("image", imageFile);
       formData.append("consent", "true");
-
-      const res = await fetch("/api/animal-diagnosis", {
-        method: "POST",
-        body: formData,
-      });
-
+      const res = await fetch("/api/animal-diagnosis", { method: "POST", body: formData });
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "診断に失敗しました");
-      }
-
+      if (!res.ok) throw new Error(data.error || "診断に失敗しました");
       setResult(data);
       setStep("result");
     } catch (err) {
@@ -106,20 +154,16 @@ export default function AnimalDiagnosisPage() {
     setError(null);
     setShowDeleteForm(false);
     setDeleteStatus(null);
+    setCameraError(null);
   };
 
   const handleDeleteRequest = async () => {
     if (!result || !deleteEmail) return;
-
     try {
       const res = await fetch("/api/animal-diagnosis/delete-request", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: result.filename,
-          email: deleteEmail,
-          reason: deleteReason,
-        }),
+        body: JSON.stringify({ savedUrl: result.savedUrl, email: deleteEmail, reason: deleteReason }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -129,6 +173,61 @@ export default function AnimalDiagnosisPage() {
     }
   };
 
+  // ── カメラ画面 ──────────────────────────────────────────
+  if (step === "camera") {
+    return (
+      <div className="min-h-screen bg-black flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3">
+          <button onClick={() => setStep("input")} className="text-white text-sm px-3 py-1.5 rounded-lg bg-white/20">
+            ← 戻る
+          </button>
+          <span className="text-white text-sm font-medium">カメラ撮影</span>
+          <button
+            onClick={() => setFacingMode((m) => m === "user" ? "environment" : "user")}
+            className="text-white text-sm px-3 py-1.5 rounded-lg bg-white/20"
+          >
+            🔄 切替
+          </button>
+        </div>
+
+        {cameraError ? (
+          <div className="flex-1 flex flex-col items-center justify-center px-6 text-center">
+            <div className="text-4xl mb-4">📷</div>
+            <p className="text-white text-sm mb-6">{cameraError}</p>
+            <button onClick={() => setStep("input")} className="bg-orange-500 text-white px-6 py-2.5 rounded-xl font-medium">
+              アップロードに切り替え
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="flex-1 relative overflow-hidden">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover"
+                style={{ transform: facingMode === "user" ? "scaleX(-1)" : "none" }}
+              />
+              {/* 顔ガイド枠 */}
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="w-56 h-72 rounded-full border-2 border-white/60 border-dashed" />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center py-8 bg-black">
+              <button
+                onClick={handleCapture}
+                className="w-20 h-20 rounded-full bg-white border-4 border-white/50 active:scale-95 transition-transform shadow-xl"
+              />
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // ── メイン画面 ──────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-yellow-50 py-10 px-4">
       <div className="max-w-lg mx-auto">
@@ -142,97 +241,62 @@ export default function AnimalDiagnosisPage() {
         {/* Input Step */}
         {step === "input" && (
           <div className="bg-white rounded-2xl shadow-md p-6 space-y-5">
-            {/* Mode selector */}
-            <div className="flex rounded-xl overflow-hidden border border-gray-200">
-              <button
-                onClick={() => setCaptureMode("upload")}
-                className={`flex-1 py-2 text-sm font-medium transition-colors ${
-                  captureMode === "upload"
-                    ? "bg-orange-500 text-white"
-                    : "bg-white text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                📁 画像をアップロード
-              </button>
-              <button
-                onClick={() => setCaptureMode("camera")}
-                className={`flex-1 py-2 text-sm font-medium transition-colors ${
-                  captureMode === "camera"
-                    ? "bg-orange-500 text-white"
-                    : "bg-white text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                📷 カメラで撮影
-              </button>
-            </div>
-
-            {/* Image area */}
+            {/* 画像選択エリア */}
             {imagePreview ? (
               <div className="relative">
-                <img
-                  src={imagePreview}
-                  alt="プレビュー"
-                  className="w-full h-64 object-cover rounded-xl"
-                />
+                <img src={imagePreview} alt="プレビュー" className="w-full h-64 object-cover rounded-xl" />
                 <button
                   onClick={() => { setImagePreview(null); setImageFile(null); }}
-                  className="absolute top-2 right-2 bg-black bg-opacity-50 text-white rounded-full w-8 h-8 flex items-center justify-center text-sm hover:bg-opacity-70"
+                  className="absolute top-2 right-2 bg-black/50 text-white rounded-full w-8 h-8 flex items-center justify-center text-sm"
                 >
                   ✕
                 </button>
               </div>
-            ) : captureMode === "upload" ? (
-              <div
-                onDrop={handleDrop}
-                onDragOver={(e) => e.preventDefault()}
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-orange-300 rounded-xl h-48 flex flex-col items-center justify-center cursor-pointer hover:bg-orange-50 transition-colors"
-              >
-                <div className="text-4xl mb-2">🖼️</div>
-                <p className="text-gray-500 text-sm">クリックまたはドラッグで画像を選択</p>
-                <p className="text-gray-400 text-xs mt-1">JPG, PNG, GIF, WebP 対応</p>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleUpload}
-                />
-              </div>
             ) : (
-              <div
-                onClick={() => cameraInputRef.current?.click()}
-                className="border-2 border-dashed border-orange-300 rounded-xl h-48 flex flex-col items-center justify-center cursor-pointer hover:bg-orange-50 transition-colors"
-              >
-                <div className="text-4xl mb-2">📷</div>
-                <p className="text-gray-500 text-sm">タップしてカメラを起動</p>
-                <input
-                  ref={cameraInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="user"
-                  className="hidden"
-                  onChange={handleUpload}
-                />
+              <div className="space-y-3">
+                {/* カメラボタン */}
+                <button
+                  onClick={() => setStep("camera")}
+                  className="w-full py-4 rounded-xl border-2 border-orange-300 text-orange-600 font-semibold flex items-center justify-center gap-2 hover:bg-orange-50 transition-colors"
+                >
+                  📷 カメラで撮影
+                </button>
+
+                {/* アップロードエリア */}
+                <div
+                  onDrop={handleDrop}
+                  onDragOver={(e) => e.preventDefault()}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-gray-300 rounded-xl h-36 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 transition-colors"
+                >
+                  <div className="text-3xl mb-1">🖼️</div>
+                  <p className="text-gray-500 text-sm">クリックまたはドラッグで画像を選択</p>
+                  <p className="text-gray-400 text-xs mt-0.5">JPG, PNG, GIF, WebP 対応</p>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileChange(f); }}
+                  />
+                </div>
               </div>
             )}
 
-            {/* Privacy notice */}
+            {/* プライバシー説明 */}
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-gray-600">
               <p className="font-medium text-amber-800 mb-1">📋 個人情報の取り扱いについて</p>
               <p className="text-xs leading-relaxed">
                 アップロードされた写真はAI診断に使用されるほか、サービス改善のためサーバーに保存されます。
-                収集した情報は第三者に販売・提供しません。
-                詳細は
+                収集した情報は第三者に販売・提供しません。詳細は
                 <Link href="/privacy-policy" className="text-blue-600 underline mx-1" target="_blank">
                   プライバシーポリシー
                 </Link>
                 をご確認ください。
-                写真の削除をご希望の場合は診断後に削除リクエストを送信できます。
               </p>
             </div>
 
-            {/* Consent */}
+            {/* 同意チェック */}
             <label className="flex items-start gap-3 cursor-pointer">
               <input
                 type="checkbox"
@@ -272,11 +336,7 @@ export default function AnimalDiagnosisPage() {
             <p className="text-gray-400 text-sm mt-1">少々お待ちください</p>
             <div className="mt-6 flex justify-center gap-1">
               {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="w-2 h-2 bg-orange-400 rounded-full animate-bounce"
-                  style={{ animationDelay: `${i * 0.15}s` }}
-                />
+                <div key={i} className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
               ))}
             </div>
           </div>
@@ -285,6 +345,9 @@ export default function AnimalDiagnosisPage() {
         {/* Result Step */}
         {step === "result" && result && (
           <div className="space-y-4">
+            {imagePreview && (
+              <img src={imagePreview} alt="診断した写真" className="w-full h-48 object-cover rounded-2xl shadow-md" />
+            )}
             <div className="bg-white rounded-2xl shadow-md p-6 text-center">
               <p className="text-sm text-gray-400 mb-2">あなたが似ている動物は...</p>
               <div className="text-7xl mb-2">{getAnimalEmoji(result.animal)}</div>
@@ -295,7 +358,6 @@ export default function AnimalDiagnosisPage() {
                   {result.score}%
                 </div>
               </div>
-
               <div className="text-left space-y-3">
                 <div className="bg-gray-50 rounded-xl p-4">
                   <p className="text-xs text-gray-400 font-medium mb-1">似ている理由</p>
@@ -308,7 +370,6 @@ export default function AnimalDiagnosisPage() {
               </div>
             </div>
 
-            {/* Actions */}
             <div className="bg-white rounded-2xl shadow-md p-5 space-y-3">
               <button
                 onClick={handleReset}
@@ -317,12 +378,14 @@ export default function AnimalDiagnosisPage() {
                 🔄 もう一度診断する
               </button>
 
-              <button
-                onClick={() => setShowDeleteForm(!showDeleteForm)}
-                className="w-full py-2.5 rounded-xl font-medium text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors text-sm"
-              >
-                🗑️ アップロードした写真の削除リクエスト
-              </button>
+              {result.savedUrl && (
+                <button
+                  onClick={() => setShowDeleteForm(!showDeleteForm)}
+                  className="w-full py-2.5 rounded-xl font-medium text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors text-sm"
+                >
+                  🗑️ 写真の削除リクエスト
+                </button>
+              )}
 
               {showDeleteForm && (
                 <div className="border border-gray-200 rounded-xl p-4 space-y-3">
@@ -330,9 +393,7 @@ export default function AnimalDiagnosisPage() {
                     <p className="text-sm text-green-600 text-center">{deleteStatus}</p>
                   ) : (
                     <>
-                      <p className="text-xs text-gray-500">
-                        削除リクエストを送信します。確認後、7営業日以内に対応いたします。
-                      </p>
+                      <p className="text-xs text-gray-500">確認後、7営業日以内に対応いたします。</p>
                       <input
                         type="email"
                         placeholder="メールアドレス（必須）"
@@ -364,13 +425,9 @@ export default function AnimalDiagnosisPage() {
 
         {/* Footer */}
         <div className="text-center mt-6 text-xs text-gray-400 space-x-3">
-          <Link href="/privacy-policy" className="hover:text-gray-600 underline">
-            プライバシーポリシー
-          </Link>
+          <Link href="/privacy-policy" className="hover:text-gray-600 underline">プライバシーポリシー</Link>
           <span>|</span>
-          <Link href="/" className="hover:text-gray-600">
-            ホームへ戻る
-          </Link>
+          <Link href="/" className="hover:text-gray-600">ホームへ戻る</Link>
         </div>
       </div>
     </div>

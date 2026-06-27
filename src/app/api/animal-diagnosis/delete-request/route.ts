@@ -1,14 +1,12 @@
 import { NextResponse } from "next/server";
-import { writeFile } from "fs/promises";
-import { join } from "path";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { filename, email, reason } = body;
+    const { savedUrl, email, reason } = body;
 
-    if (!filename || !email) {
-      return NextResponse.json({ error: "ファイル名とメールアドレスは必須です" }, { status: 400 });
+    if (!email) {
+      return NextResponse.json({ error: "メールアドレスは必須です" }, { status: 400 });
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -16,19 +14,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "有効なメールアドレスを入力してください" }, { status: 400 });
     }
 
-    const requestData = {
-      filename,
-      email,
-      reason: reason || "",
-      requestedAt: new Date().toISOString(),
-    };
+    // Log the deletion request (in production, send email or write to DB)
+    console.log("Deletion request:", { savedUrl, email, reason, requestedAt: new Date().toISOString() });
 
-    const requestsDir = join(process.cwd(), "uploads", "deletion-requests");
-    const { mkdir } = await import("fs/promises");
-    await mkdir(requestsDir, { recursive: true });
-
-    const requestFilename = `${Date.now()}-${email.replace(/[^a-z0-9]/gi, "_")}.json`;
-    await writeFile(join(requestsDir, requestFilename), JSON.stringify(requestData, null, 2));
+    // If using Vercel Blob, delete it immediately
+    if (savedUrl && process.env.BLOB_READ_WRITE_TOKEN) {
+      try {
+        const { del } = await import("@vercel/blob");
+        await del(savedUrl);
+        return NextResponse.json({ success: true, message: "写真を削除しました。" });
+      } catch (e) {
+        console.error("Blob deletion failed:", e);
+      }
+    }
 
     return NextResponse.json({ success: true, message: "削除リクエストを受け付けました。確認後、対応いたします。" });
   } catch (error: unknown) {
